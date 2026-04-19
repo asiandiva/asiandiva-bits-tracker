@@ -163,6 +163,48 @@ server.listen(PORT, () => {
   setupSubscriptions();
 });
 
+async function deleteAllSubs(token, clientId) {
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'api.twitch.tv',
+      path: '/helix/eventsub/subscriptions',
+      method: 'GET',
+      headers: { 'Client-Id': clientId, 'Authorization': 'Bearer ' + token }
+    }, (res) => {
+      let data = '';
+      res.on('data', d => data += d);
+      res.on('end', async () => {
+        try {
+          const json = JSON.parse(data);
+          const subs = json.data || [];
+          console.log('Deleting', subs.length, 'existing subscriptions');
+          for(const s of subs) {
+            await deleteSub(token, clientId, s.id);
+          }
+        } catch(e) {}
+        resolve();
+      });
+    });
+    req.setTimeout(10000, () => { req.destroy(); resolve(); });
+    req.on('error', () => resolve());
+    req.end();
+  });
+}
+
+async function deleteSub(token, clientId, id) {
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'api.twitch.tv',
+      path: '/helix/eventsub/subscriptions?id=' + id,
+      method: 'DELETE',
+      headers: { 'Client-Id': clientId, 'Authorization': 'Bearer ' + token }
+    }, (res) => { res.on('data', ()=>{}); res.on('end', resolve); });
+    req.setTimeout(5000, () => { req.destroy(); resolve(); });
+    req.on('error', () => resolve());
+    req.end();
+  });
+}
+
 async function setupSubscriptions() {
   try {
     const callbackUrl = (process.env.RENDER_EXTERNAL_URL || 'https://asiandiva-bits-tracker.onrender.com') + '/webhook';
@@ -171,15 +213,24 @@ async function setupSubscriptions() {
     const appTok = await getAppToken();
     console.log('✅ App token obtained');
 
+    // Clean up old subs first
+    await deleteAllSubs(appTok, CLIENT_ID);
+
+    // Extension bits with app token
     await subscribe(appTok, CLIENT_ID, 'extension.bits_transaction.create',
       { broadcaster_user_id: BROADCASTER_ID, extension_client_id: CLIENT_ID }, callbackUrl);
 
+    // Channel events with user token
     if(USER_TOKEN) {
       const userClientId = 'c76fsghzngwflbmg06o6c9hj2ffub2';
+      await deleteAllSubs(USER_TOKEN, userClientId);
       await subscribe(USER_TOKEN, userClientId, 'channel.cheer',                { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
       await subscribe(USER_TOKEN, userClientId, 'channel.subscribe',            { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
       await subscribe(USER_TOKEN, userClientId, 'channel.subscription.message', { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
       await subscribe(USER_TOKEN, userClientId, 'channel.subscription.gift',    { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
+      console.log('✅ User token subscriptions done');
+    } else {
+      console.log('⚠️ No USER_TOKEN - only extension bits tracked');
     }
 
     console.log('✅ All subscriptions done');
