@@ -220,18 +220,12 @@ async function setupSubscriptions() {
     await subscribe(appTok, CLIENT_ID, 'extension.bits_transaction.create',
       { broadcaster_user_id: BROADCASTER_ID, extension_client_id: CLIENT_ID }, callbackUrl);
 
-    // Channel events with user token
-    if(USER_TOKEN) {
-      const userClientId = 'c76fsghzngwflbmg06o6c9hj2ffub2';
-      await deleteAllSubs(USER_TOKEN, userClientId);
-      await subscribe(USER_TOKEN, userClientId, 'channel.cheer',                { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
-      await subscribe(USER_TOKEN, userClientId, 'channel.subscribe',            { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
-      await subscribe(USER_TOKEN, userClientId, 'channel.subscription.message', { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
-      await subscribe(USER_TOKEN, userClientId, 'channel.subscription.gift',    { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
-      console.log('✅ User token subscriptions done');
-    } else {
-      console.log('⚠️ No USER_TOKEN - only extension bits tracked');
-    }
+    // Channel events with app token (webhook requires app token)
+    await subscribe(appTok, CLIENT_ID, 'channel.cheer',                { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
+    await subscribe(appTok, CLIENT_ID, 'channel.subscribe',            { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
+    await subscribe(appTok, CLIENT_ID, 'channel.subscription.message', { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
+    await subscribe(appTok, CLIENT_ID, 'channel.subscription.gift',    { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
+    console.log('✅ Channel subscriptions done');
 
     console.log('✅ All subscriptions done');
   } catch(e) {
