@@ -15,12 +15,7 @@ function setCORS(res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
 
-// App token for extension bits
-let appToken = null;
-let tokenExpiry = 0;
-
 async function getAppToken() {
-  if(appToken && Date.now() < tokenExpiry) return appToken;
   const body = new URLSearchParams({
     client_id: CLIENT_ID,
     client_secret: CLIENT_SECRET,
@@ -35,13 +30,9 @@ async function getAppToken() {
     }, (res) => {
       let data = '';
       res.on('data', d => data += d);
-      res.on('end', () => {
-        const json = JSON.parse(data);
-        appToken = json.access_token;
-        tokenExpiry = Date.now() + (json.expires_in - 60) * 1000;
-        resolve(appToken);
-      });
+      res.on('end', () => { try { resolve(JSON.parse(data).access_token); } catch(e) { reject(e); } });
     });
+    req.setTimeout(10000, () => { req.destroy(); reject(new Error('timeout')); });
     req.on('error', reject);
     req.write(body);
     req.end();
@@ -53,7 +44,7 @@ async function subscribe(token, clientId, type, condition, callbackUrl) {
     type, version: '1', condition,
     transport: { method: 'webhook', callback: callbackUrl, secret: WEBHOOK_SECRET }
   });
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const req = https.request({
       hostname: 'api.twitch.tv',
       path: '/helix/eventsub/subscriptions',
@@ -69,10 +60,11 @@ async function subscribe(token, clientId, type, condition, callbackUrl) {
       res.on('data', d => data += d);
       res.on('end', () => {
         console.log('Subscribe', type, res.statusCode);
-        resolve({ status: res.statusCode, body: JSON.parse(data) });
+        resolve(res.statusCode);
       });
     });
-    req.on('error', reject);
+    req.setTimeout(10000, () => { req.destroy(); console.log('Timeout:', type); resolve(0); });
+    req.on('error', (e) => { console.log('Error:', type, e.message); resolve(0); });
     req.write(body);
     req.end();
   });
@@ -88,7 +80,7 @@ function broadcast(event) {
   clients.forEach(client => {
     try { client.write(data); } catch(e) { clients.delete(client); }
   });
-  console.log('📡 Broadcast:', event.type, event.user, event.bits || event.tier || '');
+  console.log('📡 Broadcast:', event.type, event.user);
 }
 
 function verifySignature(req, body) {
@@ -121,7 +113,7 @@ const server = http.createServer((req, res) => {
 
   if(req.url === '/health') {
     res.writeHead(200, {'Content-Type':'application/json'});
-    res.end(JSON.stringify({ status:'ok', clients: clients.size, events: recentEvents.length }));
+    res.end(JSON.stringify({ status:'ok', clients: clients.size }));
     return;
   }
 
@@ -164,31 +156,34 @@ const server = http.createServer((req, res) => {
   res.writeHead(404); res.end('Not found');
 });
 
-server.listen(PORT, async () => {
+// ── START SERVER FIRST then subscribe in background ───────────────
+server.listen(PORT, () => {
   console.log('🚀 Server running on port', PORT);
-  const callbackUrl = (process.env.RENDER_EXTERNAL_URL || 'https://asiandiva-bits-tracker.onrender.com') + '/webhook';
-
-  // App token for extension bits
-  const appTok = await getAppToken();
-  console.log('✅ App token obtained');
-
-  // User token for channel events
-  const userTok = USER_TOKEN;
-
-  // Subscribe with app token (extension bits only)
-  await subscribe(appTok, CLIENT_ID, 'extension.bits_transaction.create',
-    { broadcaster_user_id: BROADCASTER_ID, extension_client_id: CLIENT_ID }, callbackUrl);
-
-  // Subscribe with user token (bits, subs, resubs, giftsubs)
-  if(userTok) {
-    const userClientId = 'c76fsghzngwflbmg06o6c9hj2ffub2'; // original app client ID
-    await subscribe(userTok, userClientId, 'channel.cheer',                   { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
-    await subscribe(userTok, userClientId, 'channel.subscribe',               { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
-    await subscribe(userTok, userClientId, 'channel.subscription.message',    { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
-    await subscribe(userTok, userClientId, 'channel.subscription.gift',       { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
-  } else {
-    console.log('⚠️ No USER_TOKEN set - only extension bits will be tracked');
-  }
-
-  console.log('✅ All subscriptions registered');
+  // Do subscriptions in background so server starts immediately
+  setupSubscriptions();
 });
+
+async function setupSubscriptions() {
+  try {
+    const callbackUrl = (process.env.RENDER_EXTERNAL_URL || 'https://asiandiva-bits-tracker.onrender.com') + '/webhook';
+    console.log('📌 Callback URL:', callbackUrl);
+
+    const appTok = await getAppToken();
+    console.log('✅ App token obtained');
+
+    await subscribe(appTok, CLIENT_ID, 'extension.bits_transaction.create',
+      { broadcaster_user_id: BROADCASTER_ID, extension_client_id: CLIENT_ID }, callbackUrl);
+
+    if(USER_TOKEN) {
+      const userClientId = 'c76fsghzngwflbmg06o6c9hj2ffub2';
+      await subscribe(USER_TOKEN, userClientId, 'channel.cheer',                { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
+      await subscribe(USER_TOKEN, userClientId, 'channel.subscribe',            { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
+      await subscribe(USER_TOKEN, userClientId, 'channel.subscription.message', { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
+      await subscribe(USER_TOKEN, userClientId, 'channel.subscription.gift',    { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
+    }
+
+    console.log('✅ All subscriptions done');
+  } catch(e) {
+    console.error('Subscription error:', e.message);
+  }
+}
