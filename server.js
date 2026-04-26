@@ -117,6 +117,16 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Reset endpoint - clears event buffer
+  if(req.url === '/reset' && req.method === 'POST') {
+    setCORS(res);
+    recentEvents = [];
+    console.log('🔄 Event buffer cleared via reset');
+    res.writeHead(200, {'Content-Type':'application/json'});
+    res.end(JSON.stringify({ status:'ok', message:'Event buffer cleared' }));
+    return;
+  }
+
   if(req.url === '/webhook' && req.method === 'POST') {
     let body = '';
     req.on('data', d => body += d);
@@ -137,8 +147,8 @@ const server = http.createServer((req, res) => {
         const ev   = msg.event;
         if(type === 'channel.cheer')
           broadcast({ type:'bits', user: ev.user_name||'Anonymous', bits: ev.bits });
-        if(type === 'extension.bits_transaction.create')
-          broadcast({ type:'bits', user: ev.user_name||'Anonymous', bits: ev.bits_used, source:'blerp' });
+        if(type === 'channel.bits.use')
+          broadcast({ type:'bits', user: ev.user_name||'Anonymous', bits: ev.bits, source:'blerp' });
         if(type === 'channel.subscribe' && !ev.is_gift)
           broadcast({ type:'sub', user: ev.user_name, tier: ev.tier });
         if(type === 'channel.subscription.message')
@@ -217,8 +227,8 @@ async function setupSubscriptions() {
     await deleteAllSubs(appTok, CLIENT_ID);
 
     // Extension bits with app token
-    await subscribe(appTok, CLIENT_ID, 'extension.bits_transaction.create',
-      { broadcaster_user_id: BROADCASTER_ID, extension_client_id: CLIENT_ID }, callbackUrl);
+    await subscribe(appTok, CLIENT_ID, 'channel.bits.use',
+      { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
 
     // Channel events with app token (webhook requires app token)
     await subscribe(appTok, CLIENT_ID, 'channel.cheer',                { broadcaster_user_id: BROADCASTER_ID }, callbackUrl);
